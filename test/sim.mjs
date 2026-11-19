@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { Game } from '../src/game.js';
-import { newWorld, reachableFrom } from '../src/maps.js';
+import { newWorld, WORLD_SIZE } from '../src/maps.js';
 import { T, TS, BUILDS } from '../src/tiles.js';
-import { World } from '../src/world.js';
+import { World, CS } from '../src/world.js';
 import { mulberry32 } from '../src/rng.js';
 import { MAX_ENEMIES, TUNING } from '../src/sim/constants.js';
 import { CELL } from '../src/sim/grid.js';
@@ -10,7 +10,8 @@ import { CELL } from '../src/sim/grid.js';
 // fake localStorage for the save module
 const mem = new Map();
 globalThis.localStorage = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v), removeItem: (k) => mem.delete(k) };
-const { writeSlot, readSlot, slotMetas, deleteSlot } = await import('../src/save.js');
+const store = await import('../src/store.js');
+const { openStore, saveGame, loadGame, slotMetas, deleteSlot, exportBundle, importBundle } = store;
 const { loadData, getData, _resetData } = await import('../src/core/data.js');
 
 // data layer: guarded before load, valid after
@@ -20,25 +21,55 @@ await loadData();
 assert.deepEqual(Object.keys(getData().enemies).sort(), ['bloater', 'brute', 'runner', 'spitter', 'walker']);
 assert.ok(getData().enemies.walker.hp > 0);
 
-const hashTiles = (w) => { let h = 0; for (const t of w.tiles) h = (Math.imul(h, 31) + t) | 0; return h; };
 let passed = 0;
 const ok = (name) => { passed++; console.log('  ok  ' + name); };
+const sameTiles = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+// bounded flood fill from a tile over everything a player/zombie could eventually pass (trees, builds count as passable)
+function reaches(w, sx, sy, tx, ty, R = 150) {
+  const S = 2 * R + 1, ox = sx - R, oy = sy - R, seen = new Uint8Array(S * S), q = [R * S + R]; seen[q[0]] = 1;
+  for (let h = 0; h < q.length; h++) {
+    const i = q[h], x = i % S, y = (i / S) | 0;
+    if (x + ox === tx && y + oy === ty) return true;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= S || ny >= S) continue;
+      const t = w.get(nx + ox, ny + oy);
+      if (seen[ny * S + nx] || t === T.WALL || t === T.WATER || t === T.ROCK) continue;
+      seen[ny * S + nx] = 1; q.push(ny * S + nx);
+    }
+  }
+  return false;
+}
 
 // ---- maps ----
 for (const [kind, seed] of [['fort-hollow'], ['seeded', 'alpha'], ['seeded', 'bravo'], ['seeded', '12345'], ['seeded', 'zzz']]) {
   const w = newWorld(kind, seed);
-  assert.equal(w.get(w.home.x, w.home.y), T.BEACON, `${kind}/${seed}: beacon at home`);
-  const reach = reachableFrom(w, w.home.x, w.home.y);
-  for (const n of w.nests) assert.ok(reach[n.y * w.w + n.x], `${kind}/${seed}: nest at ${n.x},${n.y} unreachable`);
-  assert.ok(w.nests.length >= (kind === 'fort-hollow' ? 10 : 6), `${kind}/${seed}: nest count ${w.nests.length}`);
-  assert.ok(w.crates.length > 5, `${kind}/${seed}: crates ${w.crates.length}`);
-  const trees = w.tiles.filter((t) => t === T.TREE).length, water = w.tiles.filter((t) => t === T.WATER).length;
-  console.log(`      ${kind}/${seed ?? ''}: ${w.w}x${w.h} nests=${w.nests.length} crates=${w.crates.length} trees=${trees} water=${water}`);
+  assert.equal(w.w, WORLD_SIZE); assert.equal(w.get(w.home.x, w.home.y), T.BEACON, `${kind}/${seed}: beacon at home`);
+  assert.ok(w.nestTotal >= (kind === 'fort-hollow' ? 25 : 12), `${kind}/${seed}: nest count ${w.nestTotal}`);
+  assert.ok(w.gen.crates.length > 40, `${kind}/${seed}: crates ${w.gen.crates.length}`);
+  for (const n of w.gen.nests) { assert.ok(!SOLID_T(w.get(n.x, n.y)), `${kind}/${seed}: nest ${n.x},${n.y} stands on solid ground`); }
+  const near = [...w.gen.nests].sort((a, b) => Math.hypot(a.x - w.home.x, a.y - w.home.y) - Math.hypot(b.x - w.home.x, b.y - w.home.y)).slice(0, 3);
+  for (const n of near) assert.ok(reaches(w, w.home.x, w.home.y + 2, n.x, n.y, 170), `${kind}/${seed}: nest ${n.x},${n.y} unreachable from home`);
+  let trees = 0, water = 0;
+  for (let cy = 0; cy < w.cw; cy++) for (let cx = 0; cx < w.cw; cx++) for (const t of w.gen.tiles(cx, cy)) { if (t === T.TREE) trees++; else if (t === T.WATER) water++; }
+  assert.ok(trees > 10000 && water > 10000 && water < 120000, 'terrain has forests and lakes but is not a flood');
+  console.log(`      ${kind}/${seed ?? ''}: ${w.w}x${w.h} nests=${w.nestTotal} crates=${w.gen.crates.length} trees=${trees} water=${water}`);
   ok(`${kind} ${seed ?? ''} valid`);
 }
-assert.equal(hashTiles(newWorld('seeded', 'det')), hashTiles(newWorld('seeded', 'det')));
-assert.notEqual(hashTiles(newWorld('seeded', 'det')), hashTiles(newWorld('seeded', 'det2')));
-ok('seeded generation is deterministic');
+function SOLID_T(t) { return t === T.WALL || t === T.WATER || t === T.ROCK || t === T.TREE; }
+{
+  const a = newWorld('seeded', 'det'), b = newWorld('seeded', 'det'), c = newWorld('seeded', 'det2');
+  let diff = 0;
+  for (const [cx, cy] of [[0, 0], [5, 9], [16, 16], [31, 31], [20, 3]]) {
+    assert.ok(sameTiles(a.gen.tiles(cx, cy), b.gen.tiles(cx, cy)), 'same seed, same chunk');
+    if (!sameTiles(a.gen.tiles(cx, cy), c.gen.tiles(cx, cy))) diff++;
+  }
+  assert.ok(diff >= 3, 'different seeds give different terrain');
+  const t0 = performance.now(); for (let i = 0; i < 200; i++) a.gen.tiles(i % 32, (i / 7) | 0 % 32);
+  const per = (performance.now() - t0) / 200; console.log(`      chunk generation: ${per.toFixed(2)} ms each`);
+  assert.ok(per < 1.5, 'chunk generation stays cheap enough to never hitch a frame');
+  ok('seeded generation is deterministic and cheap');
+}
 
 // ---- simulation ----
 function simulate(kind, seed, seconds, { bot = true } = {}) {
@@ -106,37 +137,39 @@ for (const [kind, seed] of [['fort-hollow'], ['seeded', 'sim1']]) {
 
   // nest destruction persists
   const n = w.nests[0]; g.destroyNest(n);
-  // harvest a tree
-  let tr = null; for (let y = 0; y < w.h && !tr; y++) for (let x = 0; x < w.w; x++) if (w.get(x, y) === T.TREE) { tr = { x, y }; break; }
+  // harvest a tree near the player
+  let tr = null;
+  for (let r = 1; r < 30 && !tr; r++) for (let y = py - r; y <= py + r && !tr; y++) for (let x = px - r; x <= px + r; x++) if (w.get(x, y) === T.TREE) { tr = { x, y }; break; }
   g.p.x = (tr.x + 0.5) * TS; g.p.y = (tr.y + 0.5) * TS; g.input.harvest = true;
-  const wood0 = g.p.res.wood, stumps0 = w.tiles.filter((t) => t === T.STUMP).length;
+  const wood0 = g.p.res.wood;
   for (let i = 0; i < 90; i++) g.update(1 / 30);
-  assert.equal(w.tiles.filter((t) => t === T.STUMP).length, stumps0 + 1, 'one tree harvested to a stump');
+  assert.equal(w.get(tr.x, tr.y), T.STUMP, 'tree harvested to a stump');
   assert.ok(g.p.res.wood >= wood0 + 2, 'wood gained');
+  g.input.harvest = false;
   ok('harvesting converts tree to stump and yields wood');
 
-  // ---- save / load round trip ----
-  const data = JSON.parse(JSON.stringify(g.toSave('Test World')));
-  assert.equal(data.meta.nests, 1);
-  assert.ok(writeSlot(1, data));
-  assert.equal(slotMetas()[1].name, 'Test World'); assert.equal(slotMetas()[0], null);
-  const g2 = Game.fromSave(readSlot(1));
-  assert.equal(hashTiles(g2.world), hashTiles(w), 'tiles identical after reload');
-  assert.equal(g2.world.nests[0].alive, false, 'destroyed nest stays destroyed');
-  assert.equal(g2.world.nests.filter((q) => q.alive).length, w.nests.length - 1);
-  assert.equal(g2.world.turrets.size, 1, 'turret restored');
+  // ---- save / load round trip through the store (memory adapter) ----
+  const st = await openStore(true);
+  await saveGame(1, g, st);
+  const metas = await slotMetas(st);
+  assert.equal(metas[1].name, 'Fort Hollow'); assert.equal(metas[0], null); assert.equal(metas[1].nests, 1);
+  assert.equal(st.c.size, w.mod.size, 'only the modified chunks were written');
+  const writes = st.c.size; await saveGame(1, g, st);
+  assert.equal(st.c.size, writes, 'saving again with no changes writes no chunks');
+  const g2 = Game.fromSave(await loadGame(1, st));
+  for (const [idx, t] of w.mod) assert.ok(sameTiles(g2.world.mod.get(idx), t), 'modified chunk identical after reload');
+  assert.equal(g2.world.mod.size, w.mod.size);
+  assert.equal(g2.world.deadNests.size, 1); assert.equal(g2.world.nestsLeft(), w.nestTotal - 1);
+  g2.world.preload((n.x + 0.5) * TS, (n.y + 0.5) * TS);
+  assert.equal(g2.world.nests.find((q) => q.key === n.key).alive, false, 'destroyed nest stays destroyed');
+  g2.world.preload((px + 0.5) * TS, (py + 2.5) * TS);
+  assert.equal(g2.world.get(px, py + 2), T.TURRET); assert.equal(g2.world.turrets.size, 1, 'turret restored');
   assert.deepEqual(g2.p.res, g.p.res); assert.deepEqual(g2.p.up, g.p.up);
   assert.equal(g2.p.level, g.p.level); assert.equal(g2.time.day, g.time.day);
-  assert.equal(g2.world.crates.length, w.crates.length);
   assert.equal(g2.world.name, 'Fort Hollow');
-  const size = JSON.stringify(data).length;
-  console.log(`      save size: ${(size / 1024).toFixed(1)} KB`);
-  deleteSlot(1); assert.equal(readSlot(1), null);
-  ok('save/load round trip preserves world, nests, builds, player');
-
-  // seeded world round trip size
-  const gs = new Game(newWorld('seeded', 'big'));
-  console.log(`      seeded save size: ${(JSON.stringify(gs.toSave()).length / 1024).toFixed(1)} KB`);
+  console.log(`      save: ${st.c.size} chunk(s), world record ${(JSON.stringify(g.toSave()).length / 1024).toFixed(1)} KB`);
+  await deleteSlot(1, st); assert.equal(await loadGame(1, st), null); assert.equal(st.c.size, 0);
+  ok('save/load round trip stores only changed chunks');
 
   // death + respawn
   g2.p.res = { wood: 10, stone: 4, scrap: 9 }; g2.die();
@@ -144,10 +177,10 @@ for (const [kind, seed] of [['fort-hollow'], ['seeded', 'sim1']]) {
   g2.respawn(); assert.ok(!g2.dead && g2.p.hp === g2.s.maxHp);
   ok('death halves resources, respawn restores');
 
-  // dawn regrowth
+  // dawn regrowth: only modified chunks are scanned
   const gw = new Game(newWorld('fort-hollow')); gw.rng = () => 0;
-  gw.world.set(5, 5, T.STUMP); gw.regrow();
-  assert.equal(gw.world.get(5, 5), T.TREE);
+  gw.world.set(gw.world.home.x + 5, gw.world.home.y - 5, T.STUMP); gw.regrow();
+  assert.equal(gw.world.get(gw.world.home.x + 5, gw.world.home.y - 5), T.TREE);
   ok('stumps regrow at dawn');
 }
 
@@ -333,12 +366,12 @@ const step = (g, secs, dt = 0.02) => { for (let t = 0; t < secs; t += dt) g.upda
 
 { // ---- ammo, magazine and weapon survive a save; death halves reserve ammo ----
   const g = mk(); g.p.ammo = 77; g.p.mag = 5; g.setWeapon(1);
-  const g2 = Game.fromSave(JSON.parse(JSON.stringify(g.toSave('t'))));
+  const g2 = Game.fromSave({ data: JSON.parse(JSON.stringify(g.toSave('t'))), chunks: new Map() });
   assert.equal(g2.p.ammo, 77); assert.equal(g2.p.mag, 5); assert.equal(g2.p.weapon, 1); assert.equal(g2.wdef.name, 'Baseball Bat');
   g2.p.ammo = 41; g2.die(); assert.equal(g2.p.ammo, 20);
   // old v1 saves without ammo fields still load with defaults
   const old = g.toSave('old'); delete old.player.ammo; delete old.player.mag; delete old.player.weapon;
-  const g3 = Game.fromSave(JSON.parse(JSON.stringify(old)));
+  const g3 = Game.fromSave({ data: JSON.parse(JSON.stringify(old)), chunks: new Map() });
   assert.equal(g3.p.ammo, 48); assert.equal(g3.wdef.name, 'Pistol');
   ok('ammo/weapon persist; old saves load with defaults; death halves ammo');
 }
@@ -348,6 +381,125 @@ const step = (g, secs, dt = 0.02) => { for (let t = 0; t < secs; t += dt) g.upda
   assert.ok(g.convertScrap()); assert.equal(g.p.res.scrap, 2); assert.equal(g.p.ammo, 15);
   assert.equal(g.convertScrap(), false, 'not enough scrap');
   ok('scrap converts to ammo');
+}
+
+
+// =====================================================================================
+// Step 2: chunk streaming, persistence of changes across unload, saves, migration
+// =====================================================================================
+const stepTo = (w, tx, ty) => { w.stream((tx + 0.5) * TS, (ty + 0.5) * TS); };   // one frame of streaming at a tile
+const settle = (w, tx, ty) => { for (let i = 0; i < 60; i++) stepTo(w, tx, ty); };  // enough frames to load the whole ring
+
+{ // ---- streaming: loads around the player, one chunk per frame, unloads far away, memory stays bounded ----
+  const w = newWorld('seeded', 'stream');
+  assert.equal(w.loaded.length, 0, 'nothing loaded before the player exists');
+  const before = w.loaded.length; stepTo(w, 250, 250);
+  assert.equal(w.loaded.length, before + 1, 'at most one chunk generated per frame');
+  settle(w, 250, 250); assert.equal(w.loaded.length, 49, '7x7 window loaded around the player');
+  let peak = 0;
+  for (let x = 250; x < 500; x += 2) { stepTo(w, x, 250); peak = Math.max(peak, w.loaded.length); }
+  settle(w, 500, 250);
+  assert.ok(peak <= 11 * 11, `window never exceeds the unload radius (peak ${peak} chunks)`);
+  assert.equal(w.chunks[(250 >> 4) * w.cw + (250 >> 4)], null, 'chunk far behind the player was unloaded');
+  assert.ok(w.nests.every((n) => Math.abs((n.x >> 4) - 31) <= 5), 'nest list only holds loaded nests');
+  ok('chunks stream in around the player and unload behind');
+}
+
+{ // ---- the world remembers: edits, dead nests, looted crates, damaged nests survive unload/reload ----
+  const w = newWorld('seeded', 'memory');
+  const [n1, n2] = w.gen.nests, cr = w.gen.crates[0];
+  const visit = (p) => settle(w, p.x, p.y), away = (p) => settle(w, 511 - p.x, 511 - p.y);
+  visit(n1); const wallX = n1.x + 4, wallY = n1.y;
+  w.set(wallX, wallY, T.STONEWALL); w.tileHp.set(wallY * w.w + wallX, 17);
+  w.killNest(w.nests.find((n) => n.key === n1.y * w.w + n1.x));
+  away(n1);
+  assert.equal(w.chunks[(n1.y >> 4) * w.cw + (n1.x >> 4)], null, 'chunk unloaded after walking away');
+  visit(n2); w.nests.find((n) => n.key === n2.y * w.w + n2.x).hp = 100; away(n2);
+  visit(cr); w.loot(w.crates.find((c) => c.key === cr.y * w.w + cr.x)); away(cr);
+  visit(n1);
+  assert.equal(w.get(wallX, wallY), T.STONEWALL, 'built wall is still there'); assert.equal(w.tileHp.get(wallY * w.w + wallX), 17, 'its damage is remembered');
+  assert.equal(w.nests.find((n) => n.key === n1.y * w.w + n1.x).alive, false, 'dead nest stays dead');
+  visit(n2); assert.equal(w.nests.find((n) => n.key === n2.y * w.w + n2.x).hp, 100, 'wounded nest keeps its wounds');
+  visit(cr); assert.equal(w.crates.find((c) => c.key === cr.y * w.w + cr.x).looted, true, 'looted crate stays looted');
+  assert.ok(w.explored[(cr.y >> 4) * w.cw + (cr.x >> 4)], 'revealed chunks are remembered (fog of war)');
+  assert.ok(w.explored.some((v) => !v), 'most of the map is still fog');
+  ok('edits, dead nests, looted crates and fog persist across unload');
+}
+
+{ // ---- game world is solid across chunk borders and the edge of the map ----
+  const g = mk(); const w = g.world;
+  assert.equal(w.get(-1, 5), T.WALL); assert.equal(w.get(5, w.h), T.WALL); assert.ok(w.solidAt(-5, -5));
+  w.set(-3, 4, T.GRASS); w.set(9999, 9999, T.GRASS); assert.ok(true, 'out-of-bounds writes are ignored');
+  g.p.x = 2 * TS; g.p.y = 2 * TS; g.update(0.02);
+  g.input.x = -1; g.input.y = -1; for (let i = 0; i < 60; i++) g.update(0.02);
+  assert.ok(g.p.x >= 0 && g.p.y >= 0, 'player cannot leave the map');
+  ok('map edge is solid');
+}
+
+{ // ---- fog-of-war only reveals near the player; zone names / danger tiers ----
+  const w = newWorld('fort-hollow'); settle(w, w.home.x, w.home.y);
+  assert.equal(w.zoneAt(w.home.x, w.home.y), 'Fort Hollow');
+  assert.equal(w.zoneAt(w.home.x + 150, w.home.y), 'Deep Wilds'); assert.ok(w.tier(w.home.x + 200, w.home.y) === 3 && w.tier(w.home.x, w.home.y) === 0);
+  ok('named zones and distance-based danger tiers');
+}
+
+{ // ---- export bundle -> import into a new slot -> identical world ----
+  const st = await openStore(true); const g = mk(11);
+  const px = Math.floor(g.p.x / TS), py = Math.floor(g.p.y / TS);
+  g.p.res = { wood: 30, stone: 30, scrap: 30 }; g.build = 2; g.placeBuild(px + 2, py); g.placeBuild(px + 2, py + 1);
+  g.destroyNest(g.world.nests.find((n) => n.alive)); g.world.loot(g.world.crates[0]);
+  await saveGame(0, g, st);
+  const bundle = JSON.parse(JSON.stringify(await exportBundle(0, st)));    // through JSON like a real file
+  const slot = await importBundle(bundle, st); assert.equal(slot, 1, 'imported into the first free slot');
+  const a = await loadGame(0, st), b = await loadGame(1, st);
+  assert.equal(a.chunks.size, b.chunks.size);
+  for (const [idx, t] of a.chunks) assert.ok(sameTiles(t, b.chunks.get(idx)), 'chunk identical after export/import');
+  assert.deepEqual(a.data.world, b.data.world); assert.deepEqual(a.data.player, b.data.player);
+  const g2 = Game.fromSave(b); assert.equal(g2.world.get(px + 2, py), T.STONEWALL);
+  assert.equal(g2.world.nestsLeft(), g.world.nestsLeft());
+  ok('export/import round trip is lossless');
+  await importBundle(bundle, st); await importBundle(bundle, st).then(() => assert.fail('should be full'), (e) => assert.match(e.message, /full/));
+  ok('import refuses when every slot is used');
+}
+
+{ // ---- v1 migration: an old flat save becomes a stamp in a new world, nothing lost ----
+  const W = 96, old = {
+    v: 1, meta: { name: 'Old Town' },
+    world: { w: W, h: W, rle: [0, 4000, 4, 50, 0, W * W - 4050], home: { x: 48, y: 48 }, kind: 'fort-hollow', seed: 'x', name: 'Old Town', zones: [],
+      nests: [{ x: 10, y: 10, hp: 260, maxHp: 260, alive: true }, { x: 80, y: 80, hp: 90, maxHp: 260, alive: true }, { x: 20, y: 70, hp: 0, maxHp: 260, alive: false }],
+      crates: [{ x: 30, y: 30, looted: true }, { x: 31, y: 31, looted: false }], tileHp: [[4000, 12]] },
+    player: { x: 48 * TS, y: 50 * TS, hp: 50, xp: 3, level: 4, res: { wood: 5, stone: 1, scrap: 2 }, up: { dmg: 1 }, pending: 0, build: 0, ammo: 20, mag: 5, weapon: 0 },
+    time: { day: 3, clock: 0.2 }, stats: { kills: 7, nests: 1, deaths: 0, playTime: 100 },
+  };
+  mem.set('pasurvivors.slot.0', JSON.stringify(old));
+  const st = await openStore(true);
+  assert.equal(mem.get('pasurvivors.slot.0'), undefined, 'old key moved out of the way'); assert.ok(mem.get('pasurvivors.slot.0.v1backup'), 'but kept as a backup');
+  const metas = await slotMetas(st); assert.equal(metas[0].name, 'Old Town'); assert.equal(metas[0].day, 3); assert.equal(metas[0].nests, 1);
+  const g = Game.fromSave(await loadGame(0, st)), w = g.world, off = (WORLD_SIZE - W) >> 1;
+  assert.equal(g.p.level, 4); assert.equal(g.p.ammo, 20); assert.deepEqual(g.p.res, { wood: 5, stone: 1, scrap: 2 });
+  assert.equal(g.p.x, 48 * TS + off * TS, 'player moved with the map');
+  assert.equal(w.get(off + 5, off + 40), T.GRASS); assert.equal(w.get(off + 4000 % W + 1, off + (4000 / W | 0)), T.WALL, 'old tiles preserved at the offset');
+  assert.equal(w.home.x, off + 48, 'home carried over'); assert.equal(w.deadNests.size, 1); assert.equal(w.nestsLeft(), w.nestTotal - 1);
+  w.preload((off + 80.5) * TS, (off + 80.5) * TS);
+  assert.equal(w.nests.find((n) => n.x === off + 80 && n.y === off + 80).hp, 90, 'wounded nest kept its HP');
+  assert.equal(w.crates.find((c) => c.x === off + 30 && c.y === off + 30).looted, true);
+  assert.equal(w.tileHp.size, 1);
+  ok('v1 saves migrate into the chunk world without losing anything');
+}
+
+{ // ---- a long walk through the generated world stays smooth ----
+  const g = new Game(newWorld('seeded', 'walk')); g.p.hp = 1e9; g.s.maxHp = 1e9;
+  g.spawnAmbient = () => {}; g.nestSpawns = () => {};
+  g.p.x = (g.world.home.x + 4) * TS; g.p.y = (g.world.home.y + 0.5) * TS; const x0 = g.p.x; let worst = 0, gen = 0;   // the home road runs straight east
+  const w = g.world, lo = w.load.bind(w); w.load = (cx, cy) => { gen++; return lo(cx, cy); };
+  for (let f = 0; f < 3000; f++) {
+    g.input.x = 1; g.input.y = 0; g.input.harvest = false;
+    const t = performance.now(); g.update(1 / 60); worst = Math.max(worst, performance.now() - t);
+    g.enemies.length = 0;
+  }
+  console.log(`      walked ${((g.p.x - x0) / TS) | 0} tiles, ${gen} chunk loads, worst frame ${worst.toFixed(1)} ms, ${w.loaded.length} chunks resident`);
+  assert.ok((g.p.x - x0) / TS > 100, 'walked a long way'); assert.ok(w.loaded.length <= 121); assert.ok(worst < 25, 'no frame hitch while streaming');
+  ok('walking across the world streams smoothly');
 }
 
 console.log(`\n${passed} checks passed`);

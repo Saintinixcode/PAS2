@@ -3,7 +3,7 @@ import { loadData } from './core/data.js';
 import { newWorld } from './maps.js';
 import { Renderer } from './render.js';
 import { BUILDS, TS } from './tiles.js';
-import { SLOTS, slotMetas, readSlot, writeSlot, deleteSlot, exportSlot, importFile } from './save.js';
+import { openStore, slotMetas, saveGame, loadGame, deleteSlot, exportBundle, importBundle, downloadBundle } from './store.js';
 
 const $ = (id) => document.getElementById(id);
 const show = (id, on = true) => $(id).classList.toggle('hidden', !on);
@@ -19,9 +19,9 @@ function ago(ts) {
   const m = Math.round((Date.now() - ts) / 60000);
   return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 }
-function renderMenu() {
+async function renderMenu() {
   const box = $('slots'); box.innerHTML = '';
-  slotMetas().forEach((m, i) => {
+  (await slotMetas()).forEach((m, i) => {
     const el = document.createElement('div'); el.className = 'slot';
     if (m) {
       el.innerHTML = `<h3>${esc(m.name)}</h3><div class="meta">Day ${m.day} · Level ${m.level}<br>${m.nests}/${m.nestTotal} nests cleared<br>${m.kills} kills<br>Saved ${ago(m.savedAt)}</div>
@@ -34,11 +34,12 @@ function renderMenu() {
       if (a === 'play') startFromSlot(i);
       if (a === 'new') { slot = i; show('newworld'); }
       if (a === 'export') exportSlot(i);
-      if (a === 'del' && confirm('Delete this world permanently?')) { deleteSlot(i); renderMenu(); }
+      if (a === 'del' && confirm('Delete this world permanently?')) deleteSlot(i).then(renderMenu);
     };
     box.appendChild(el);
   });
 }
+async function exportSlot(i) { const b = await exportBundle(i); if (b) downloadBundle(b); else $('menumsg').textContent = 'Nothing to export.'; }
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 $('nwkind').onchange = () => show('seedrow', $('nwkind').value === 'seeded');
@@ -52,13 +53,13 @@ $('nwgo').onclick = () => {
 };
 $('import').onclick = () => $('file').click();
 $('file').onchange = async (e) => {
-  try { await importFile(e.target.files[0]); $('menumsg').textContent = 'Imported.'; renderMenu(); }
+  try { await importBundle(JSON.parse(await e.target.files[0].text())); $('menumsg').textContent = 'Imported.'; renderMenu(); }
   catch (err) { $('menumsg').textContent = err.message; }
   e.target.value = '';
 };
 
-function startFromSlot(i) {
-  const d = readSlot(i); if (!d) return;
+async function startFromSlot(i) {
+  const d = await loadGame(i); if (!d) return;
   slot = i; begin(Game.fromSave(d));
 }
 
@@ -68,12 +69,13 @@ function begin(g) {
   game.say(game.time.day === 1 && game.stats.kills === 0 ? 'Hold E near trees, rocks and crates. Nests (red) spawn the horde.' : `Welcome back. Day ${game.time.day}.`);
   running = true; last = performance.now(); hudT = 0; game.input.fire = false;
 }
+// Saves run in the background (IndexedDB); only chunks changed since the last save are written.
 function save() {
-  if (!game || slot < 0) return false;
-  return writeSlot(slot, game.toSave());
+  if (!game || slot < 0) return Promise.resolve(false);
+  return saveGame(slot, game);
 }
-function toMenu() {
-  save(); running = false; game = null; show('hud', false); show('pause', false); show('menu'); renderMenu();
+async function toMenu() {
+  await save(); running = false; game = null; show('hud', false); show('pause', false); show('menu'); renderMenu();
 }
 
 // ---------- HUD ----------
@@ -101,7 +103,7 @@ function hud() {
   const mins = Math.floor(t.clock * 24);
   setText('clock', `Day ${t.day} · ${game.isNight ? '🌙 night' : '☀️ day'} (${String(mins).padStart(2, '0')}:00)`);
   const z = game.world.zoneAt(Math.floor(p.x / TS), Math.floor(p.y / TS));
-  let left = 0; for (const n of game.world.nests) if (n.alive) left++;
+  const left = game.world.nestsLeft();
   setText('zone', `${z || 'Wilds'} · ${left} nests left`);
 
   // weapon panel
@@ -155,8 +157,8 @@ function setPause(on) {
   }
 }
 $('resume').onclick = () => setPause(false);
-$('savenow').onclick = () => { toast(save() ? 'Saved.' : 'Save failed (storage full?). Try Export.', 'good'); };
-$('export').onclick = () => { save(); exportSlot(slot); };
+$('savenow').onclick = async () => { toast((await save()) ? 'Saved.' : 'Save failed. Try Export.', 'good'); };
+$('export').onclick = async () => { await save(); exportSlot(slot); };
 $('quit').onclick = toMenu;
 
 // ---------- input ----------
@@ -240,6 +242,7 @@ requestAnimationFrame(frame);
 // Load JSON content before the menu becomes usable. Fails loudly on file:// or a missing file.
 try {
   await loadData();
+  await openStore();
   renderMenu();
 } catch (err) {
   console.error(err);

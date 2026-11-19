@@ -1,4 +1,5 @@
 import { World } from './world.js';
+import { buildSave } from './store.js';
 import { TS, BUILDS } from './tiles.js';
 import { DAY_LEN, NIGHT_START, FLOW_R, INF, MAX_ENEMIES, dist2 } from './sim/constants.js';
 import { getTables } from './core/data.js';
@@ -43,6 +44,7 @@ export class Game {
       ammo: 48, mag: 12, reload: 0, weapon: 0, clickCd: 0, flash: 0,
     };
     if (saved) this.loadSaved(saved);
+    world.preload(this.p.x, this.p.y);         // load the chunks around the player before the first frame
     this.wdef = null; const wi = this.p.weapon | 0; this.p.weapon = -1; this.setWeapon(wi);
     if (this.wdef.kind === 'ranged') this.p.mag = Math.min(this.p.mag, this.wdef.mag);
     this.input.ax = this.p.x + 100; this.input.ay = this.p.y;
@@ -59,13 +61,7 @@ export class Game {
 
   toSave(name) {
     const p = this.p;
-    return {
-      v: 1,
-      meta: { name: name || this.world.name, kind: this.world.kind, seed: this.world.seed, day: this.time.day, level: p.level, kills: this.stats.kills, nests: this.world.nests.filter((n) => !n.alive).length, nestTotal: this.world.nests.length, savedAt: Date.now() },
-      world: this.world.serialize(),
-      player: { x: p.x, y: p.y, hp: p.hp, xp: p.xp, level: p.level, res: p.res, up: p.up, pending: p.pending, build: this.build, ammo: p.ammo, mag: p.mag, weapon: p.weapon },
-      time: this.time, stats: this.stats,
-    };
+    return buildSave(this.world, { x: p.x, y: p.y, hp: p.hp, xp: p.xp, level: p.level, res: p.res, up: p.up, pending: p.pending, build: this.build, ammo: p.ammo, mag: p.mag, weapon: p.weapon }, this.time, this.stats, name);
   }
 
   loadSaved(d) {
@@ -75,7 +71,8 @@ export class Game {
     this.time = { ...d.time }; this.stats = { ...this.stats, ...d.stats };
   }
 
-  static fromSave(d) { return new Game(World.deserialize(d.world), d); }
+  // `loaded` = { data, chunks } as returned by store.loadGame
+  static fromSave(loaded) { return new Game(World.fromState(loaded.data.world, loaded.chunks), loaded.data); }
 
   say(text, kind = 'info') { this.events.push({ type: 'msg', text, kind }); }
 
@@ -112,6 +109,7 @@ export class Game {
     const hx = w.home.x * TS + TS / 2, hy = w.home.y * TS + TS / 2;
     if (dist2(p.x, p.y, hx, hy) < 90 * 90) p.hp = Math.min(s.maxHp, p.hp + 8 * dt);
 
+    w.stream(p.x, p.y);
     this.flowT -= dt;
     if (this.flowT <= 0) { this.flowT = 0.4; this.buildFlow(); }
 

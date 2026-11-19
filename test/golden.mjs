@@ -9,9 +9,10 @@ import { loadData } from '../src/core/data.js';
 await loadData();
 
 // Refactors must not change this. A deliberate gameplay change updates it (see Step notes in PLAN.md).
-// Updated in Step 1 (91c20ff3 -> 5ff15ed3 -> 6beaf091 after playtest tweaks: bat 24->17 dmg, 5 scrap = 5 ammo) on purpose: mouse-aimed finite-ammo combat, cap 220 -> 60,
+// Updated in Step 1 (91c20ff3 -> 5ff15ed3 -> 6beaf091 after playtest tweaks: bat 24->17 dmg, 5 scrap = 5 ammo)
+// and in Step 2 (-> 2c656f20: 512x512 chunk world, new nest layout, danger tiers) on purpose: mouse-aimed finite-ammo combat, cap 220 -> 60,
 // new spawn tuning, spitter/bloater types, XP on kill, ground drops. Any other change here is a regression.
-export const EXPECTED = '6beaf091';
+export const EXPECTED = '2c656f20';
 
 export function runGolden() {
   const g = new Game(newWorld('fort-hollow'));
@@ -35,7 +36,7 @@ export function runGolden() {
       g.build = 2; g.placeBuild(px - 2, py); g.build = 3; g.placeBuild(px, py + 2);
       g.build = 0;
     }
-    if (f === 4000) { const n = g.world.nests[0]; n.hp = 0; g.destroyNest(n); }
+    if (f === 4000) { const n = g.world.nests.filter((q) => q.alive).sort((a, b) => a.key - b.key)[0]; n.hp = 0; g.destroyNest(n); }
     g.update(dt);
     for (const ev of g.events.splice(0)) {
       if (ev.type === 'levelup') g.chooseUpgrade(ev.choices[0].id);
@@ -48,10 +49,10 @@ export function runGolden() {
     time: [g.time.day, r(g.time.clock)], stats: g.stats, deaths,
     enemies: g.enemies.map((e) => [e.type, r(e.x), r(e.y), r(e.hp)]),
     bullets: g.bullets.length, drops: g.drops.map((d) => [d.kind, d.n, r(d.x), r(d.y)]), ammo: [g.p.ammo, g.p.mag, g.p.weapon], nAmbient: g.nAmbient,
-    nests: g.world.nests.map((n) => [n.alive, r(n.hp)]),
-    crates: g.world.crates.filter((c) => c.looted).length,
-    tiles: [...g.world.tiles].reduce((h, t) => (Math.imul(h, 31) + t) | 0, 0),
-    tileHp: [...g.world.tileHp.entries()], turrets: g.world.turrets.size,
+    nests: g.world.nests.map((n) => [n.key, n.alive, r(n.hp)]), dead: [...g.world.deadNests], loadedChunks: g.world.loaded.length,
+    crates: [...g.world.looted],
+    tiles: [...g.world.mod.entries()].map(([k, t]) => [k, t.reduce((h, v) => (Math.imul(h, 31) + v) | 0, 0)]),
+    tileHp: [...g.world.tileHp.entries()], turrets: g.world.turrets.size, mod: g.world.mod.size,
   };
   const s = JSON.stringify(state);
   let h = 2166136261;

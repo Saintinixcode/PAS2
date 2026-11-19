@@ -2,7 +2,7 @@
 
 Status key: [ ] todo · [~] in progress · [x] done. Update this file at the end of every step.
 
-**Naming:** the project is **pas2-v3** (GitHub `Saintinixcode/PAS2`, Vercel project `pas2-v3`) until every milestone below is done. Step 1 is shipped; next up is Step 2.
+**Naming:** the project is **pas2-v3** (GitHub `Saintinixcode/PAS2`, Vercel project `pas2-v3`) until every milestone below is done. Steps 0-2 are done; next up is Step 3.
 
 ## Goals (from the brief)
 1. Much bigger map, **chunk-based**, only the area around the player is loaded or simulated.
@@ -51,7 +51,7 @@ Rules for every later step:
 6. **Streaming budget.** Chunk generation is time-sliced (at most ~2 ms/frame, one chunk at a time) so crossing a chunk border never hitches; move to a Web Worker returning transferable `Uint8Array`s only if measurements say so. Entities in far chunks sleep. (Step 2)
 7. **Saves don't block.** IndexedDB stores typed arrays directly (no giant `JSON.stringify` on the main thread); only dirty chunks are written; writes are debounced. (Step 2)
 8. **Fixed timestep.** Simulate in fixed steps with an accumulator so behaviour is identical on 60 Hz and 144 Hz screens and tests stay deterministic. (Step 1) *(Step 1 shipped bounded substeps instead: n = ceil(dt/(1/60)), dt capped at 0.1 s. Tests drive `update(dt)` directly so they stay deterministic. Strict accumulator is still an option later.)*
-9. **Guard it.** `npm run perf` budgets: sim avg < 1 ms at 40 zombies and < 2 ms at 220; canvas calls/frame < 2,600 now, to be tightened to < 300 after Step 2. Any step that blows a budget fixes it before shipping.
+9. **Guard it.** `npm run perf` budgets: sim avg < 1 ms at 40 zombies and < 2 ms at 220; canvas calls/frame < 900 (was 2,160 before chunk baking; ~600 now). Any step that blows a budget fixes it before shipping.
 
 ## Steps
 Each step: small scope, ends with `npm test` green, an updated zip (or a commit if the repo is attached), a short playtest checklist, and a **stop for your feedback** before the next step. A step should touch about 4-6 files so it fits comfortably in context.
@@ -72,12 +72,22 @@ Each step: small scope, ends with `npm test` green, an updated zip (or a commit 
 - Tests: ammo/reload state machine, spawn cap, aim vector math; `npm run perf` stays within budget. Golden hash is **expected to change** here; update `EXPECTED` and note why.
 - Playtest: one night, is it tense rather than a swarm?
 
-### Step 2: Chunk world engine  [ ]
+### Step 2: Chunk world engine  [x]
 - 2a: `chunk.js`, per-chunk deterministic generation (`gen.js`), loaded-window manager with unload. Renderer draws **baked per-chunk canvases (ground layer + tall-object layer)**, cheap night lighting (perf rules 1, 2, 6). Flow field and collision read through the window.
 - 2b: `store.js` IndexedDB: save only modified chunks (tile deltas, nest/crate state, built tiles, graves); meta record for player and clock; export/import bundle; v1 migration.
 - 2c: Fort Hollow stamp at the centre; nests and ruins from a jittered region grid; biomes and distance-based danger; minimap fog-of-war stored per chunk.
 - Tests: same seed gives the same chunk; edit, unload, reload round trip; world is identical after export/import; chunk load cost budget.
 - Playtest: walk far, build, come back, nothing lost; no hitching on chunk borders.
+
+**Step 2 as built** (branch `step-2-chunks`)
+- World is 512x512 tiles = 32x32 chunks of 16x16 (`CS = 16`). `gen.js` is a pure function of the seed: terrain noise, a sparse road grid that bridges water, ruins (one per 28-tile cell), nests (one per 64-tile cell, none within 48 tiles of home), crates inside ruins. About 0.07 ms per chunk, so generation never needs slicing or a worker; the window loads one chunk per frame, nearest first (7x7 loaded, dropped beyond 11x11).
+- Fort Hollow is the authored 96x96 map stamped at the centre (roads continue outward). Entities in the stamp are added to the global lists with an offset.
+- `World` keeps `mod` (every chunk the player changed), `deadNests`, `nestHp`, `looted`, `tileHp`, `explored` (fog). `world.nests/crates/turrets` only hold what is in loaded chunks. Counts (`nestTotal`, `nestsLeft()`) are global.
+- Renderer: one baked canvas per visible chunk (ground + static objects together; beacon glow and damage bars are drawn on top), re-baked only when that chunk changes, recycled when unloaded. Minimap is a 160x160-tile window painted per chunk, fogged until explored. Warm frame: ~600 canvas calls and ~0.1 ms of draw in headless Chromium.
+- Storage: `store.js` writes `saves` (small JSON) and `chunks` (one Uint8Array per modified chunk) to IndexedDB; unchanged chunks are never rewritten. Export bundle = save + RLE chunks. v1 saves migrate to a `migrated` world (old map stamped at the centre, nothing lost).
+- Perf riders: minimap rebuild-per-second removed (harvest hitch), zombie flow buckets pooled (no allocation each rebuild).
+- Danger tiers by distance from home add +15% zombie HP per tier (`TUNING.tierHp`). Zone names: Outskirts, The Wilds, Deep Wilds, Dead Reach.
+- Golden hash is now `2c656f20` (new world, new nest layout). Not done / deferred: Web Worker generation (not needed), per-chunk entity sleep (zombies far from the player are not simulated anyway), grave chunks (Step 7).
 
 ### Step 3: Items, drops, parts, stats (logic only)  [ ]
 - **Legacy catalogue import:** port the PAS1 ladder, names and legendaries into `items.json` per `docs/LEGACY_CATALOGUE.md` (sizes, rarity, rescaled stats, legendary uniques/procs, Tier 5 Kevlar set, ammo types, containers, parts and potions). Ratios from PAS1 are kept, raw numbers are rescaled.

@@ -158,13 +158,12 @@ export function updateBullets(game, dt) {
 
 export function destroyNest(game, n) {
   if (!n.alive) return;
-  n.alive = false; game.stats.nests++;
+  game.world.killNest(n); game.stats.nests++;
   const nx = (n.x + 0.5) * TS, ny = (n.y + 0.5) * TS;
   for (let k = 0; k < 4; k++) game.drops.push({ x: nx + (game.rng() - 0.5) * 70, y: ny + (game.rng() - 0.5) * 70, kind: 0, n: 8, life: 180 });
   for (let k = 0; k < 6; k++) game.drops.push({ x: nx + (game.rng() - 0.5) * 70, y: ny + (game.rng() - 0.5) * 70, kind: 1, n: 3 + (game.time.day >> 1), life: 180 });
   game.addXp(30 + game.time.day * 2);
-  let left = 0;
-  for (const q of game.world.nests) if (q.alive) left++;
+  const left = game.world.nestsLeft();
   game.say(left ? `Nest destroyed! Loot dropped. ${left} remain.` : 'The last nest is destroyed. This land is yours.', 'good');
   game.events.push({ type: 'nest' });
   game.save_needed = true;

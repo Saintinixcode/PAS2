@@ -14,7 +14,7 @@ export const TUNING = {
   ambientCapNight: 14, ambientCapPerDay: 2.5, ambientCapMax: 40,
   nestCapBase: 3, nestCapMax: 8,                      // live zombies per nest = base + floor(day / 2), capped
   nestIntervalBase: 6, nestIntervalPerDay: 0.25, nestIntervalMin: 2.5, nestNightSpeedup: 1.5,
-  dropLifetime: 120,
+  tierHp: 0.15, dropLifetime: 120,
 };
 
 export const dist2 = (ax, ay, bx, by) => (ax - bx) * (ax - bx) + (ay - by) * (ay - by);

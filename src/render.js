@@ -1,5 +1,8 @@
 import { T, TS, COLORS, MINI, BUILDS, BREAKABLE } from './tiles.js';
 import { NIGHT_START } from './game.js';
+import { CS } from './gen.js';
+
+const CPX = CS * TS; // chunk size in pixels (baked canvas size)
 
 const hash = (x, y) => { let h = (x * 374761393 + y * 668265263) | 0; h = (h ^ (h >> 13)) * 1274126177; return (h ^ (h >> 16)) >>> 0; };
 
@@ -24,8 +27,10 @@ export class Renderer {
     // one pre-rendered soft light sprite, stamped with drawImage instead of building a gradient per light per frame
     this.lightSpr = document.createElement('canvas'); this.lightSpr.width = this.lightSpr.height = 128;
     { const l = this.lightSpr.getContext('2d'), g = l.createRadialGradient(64, 64, 19, 64, 64, 64); g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)'); l.fillStyle = g; l.fillRect(0, 0, 128, 128); }
-    this.mm = document.createElement('canvas');
-    this.mmT = 0; this.cam = { x: 0, y: 0 }; this.t = 0;
+    this.mm = document.createElement('canvas'); this.mmImg = null; this.mmDone = null; this.mmQ = [];
+    this.baked = new Map();   // chunk index -> { cv, ver, seen } baked ground+object canvas
+    this.spare = [];          // recycled chunk canvases
+    this.frame = 0; this.cam = { x: 0, y: 0 }; this.t = 0;
     this.resize();
   }
   resize() {
@@ -53,36 +58,30 @@ export class Renderer {
     const x0 = Math.max(0, Math.floor(cx / TS)), y0 = Math.max(0, Math.floor(cy / TS));
     const x1 = Math.min(w.w - 1, Math.floor((cx + c.width) / TS)), y1 = Math.min(w.h - 1, Math.floor((cy + c.height) / TS));
 
-    // ground pass
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      const t = w.tiles[y * w.w + x], h = hash(x, y);
-      ctx.fillStyle = SHADES[t][h & 3];
-      ctx.fillRect(x * TS, y * TS, TS, TS);
-      if (t === T.WATER) { ctx.fillStyle = 'rgba(255,255,255,.07)'; ctx.fillRect(x * TS + ((h >> 4) % 20) + Math.sin(this.t * 1.5 + x) * 2, y * TS + ((h >> 9) % 24), 10, 2); }
-      else if (t === T.ROAD && (h & 15) === 0) { ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fillRect(x * TS + 14, y * TS + 14, 4, 4); }
-      else if (t === T.GRASS && (h & 7) === 0) { ctx.fillStyle = 'rgba(0,0,0,.15)'; ctx.fillRect(x * TS + ((h >> 5) & 15) + 4, y * TS + ((h >> 9) & 15) + 4, 2, 5); }
-    }
-    // object pass
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      const t = w.tiles[y * w.w + x], px = x * TS, py = y * TS;
-      switch (t) {
-        case T.TREE: ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.ellipse(px + 16, py + 27, 12, 5, 0, 0, 7); ctx.fill();
-          ctx.fillStyle = '#4a3322'; ctx.fillRect(px + 14, py + 18, 5, 10);
-          ctx.fillStyle = '#1f4a22'; ctx.beginPath(); ctx.arc(px + 16, py + 13, 13, 0, 7); ctx.fill();
-          ctx.fillStyle = '#2e6a30'; ctx.beginPath(); ctx.arc(px + 13, py + 10, 7, 0, 7); ctx.fill(); break;
-        case T.ROCK: ctx.fillStyle = '#5b5b66'; ctx.beginPath(); ctx.moveTo(px + 3, py + 28); ctx.lineTo(px + 8, py + 8); ctx.lineTo(px + 22, py + 4); ctx.lineTo(px + 30, py + 26); ctx.fill();
-          ctx.fillStyle = '#7b7b88'; ctx.beginPath(); ctx.moveTo(px + 8, py + 8); ctx.lineTo(px + 22, py + 4); ctx.lineTo(px + 18, py + 16); ctx.fill(); break;
-        case T.WALL: ctx.fillStyle = '#4a4252'; ctx.fillRect(px, py, TS, TS); ctx.fillStyle = '#5c5366'; ctx.fillRect(px, py, TS, 6); ctx.fillStyle = '#2b2630'; ctx.fillRect(px, py + TS - 4, TS, 4); break;
-        case T.STUMP: ctx.fillStyle = '#4a3322'; ctx.fillRect(px + 11, py + 18, 10, 7); ctx.fillStyle = '#6a4a30'; ctx.fillRect(px + 11, py + 18, 10, 3); break;
-        case T.RUBBLE: ctx.fillStyle = '#5b5348'; ctx.fillRect(px + 6, py + 20, 8, 6); ctx.fillRect(px + 18, py + 12, 7, 6); break;
-        case T.BARRICADE: this.hpTile(w, x, y, t); ctx.fillStyle = '#8a5a30'; for (let k = 0; k < 3; k++) ctx.fillRect(px + 2, py + 5 + k * 9, 28, 6);
-          ctx.fillStyle = '#5a3a1e'; ctx.fillRect(px + 6, py + 2, 4, 28); ctx.fillRect(px + 22, py + 2, 4, 28); break;
-        case T.STONEWALL: this.hpTile(w, x, y, t); ctx.fillStyle = '#8a8a96'; ctx.fillRect(px + 1, py + 1, 30, 30); ctx.fillStyle = '#a5a5b2'; ctx.fillRect(px + 1, py + 1, 30, 5); ctx.fillStyle = '#6a6a76'; ctx.fillRect(px + 15, py + 8, 2, 22); break;
-        case T.TURRET: this.hpTile(w, x, y, t); ctx.fillStyle = '#34343c'; ctx.fillRect(px + 3, py + 3, 26, 26); ctx.fillStyle = '#d9b44a'; ctx.beginPath(); ctx.arc(px + 16, py + 16, 8, 0, 7); ctx.fill();
-          ctx.fillStyle = '#222'; ctx.fillRect(px + 16, py + 14, 14, 4); break;
-        case T.BEACON: ctx.fillStyle = '#34343c'; ctx.fillRect(px + 6, py + 20, 20, 8); ctx.fillStyle = '#5ad0ff'; ctx.beginPath(); ctx.arc(px + 16, py + 14, 8 + Math.sin(this.t * 3) * 1.5, 0, 7); ctx.fill();
-          ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(px + 16, py + 14, 3, 0, 7); ctx.fill(); break;
+    // ground + objects: one drawImage per visible chunk (baked once, re-baked only when a tile in it changes)
+    this.frame++;
+    const gx0 = x0 >> 4, gy0 = y0 >> 4, gx1 = x1 >> 4, gy1 = y1 >> 4;
+    let spareBakes = 1; // pre-bake one ring-neighbour per frame so walking never hits a cold chunk
+    for (let gy = Math.max(0, gy0 - 1); gy <= Math.min(w.cw - 1, gy1 + 1); gy++) for (let gx = Math.max(0, gx0 - 1); gx <= Math.min(w.cw - 1, gx1 + 1); gx++) {
+      const ch = w.chunks[gy * w.cw + gx]; if (!ch) continue;
+      const inView = gx >= gx0 && gx <= gx1 && gy >= gy0 && gy <= gy1;
+      let bk = this.baked.get(ch.idx);
+      if (!bk || bk.ver !== ch.ver) {
+        if (!inView && (spareBakes <= 0 || bk)) continue;
+        if (!inView) spareBakes--;
+        bk = this.bake(ch, bk);
       }
+      bk.seen = this.frame;
+      if (inView) ctx.drawImage(bk.cv, gx * CPX, gy * CPX);
+    }
+    if (this.frame % 60 === 0) this.evict(w);
+    // animated bits drawn on top of the baked layer: beacon glow and damage bars on built tiles
+    { const hx = w.home.x * TS, hy = w.home.y * TS;
+      if (w.get(w.home.x, w.home.y) === T.BEACON) { ctx.fillStyle = '#5ad0ff'; ctx.beginPath(); ctx.arc(hx + 16, hy + 14, 8 + Math.sin(this.t * 3) * 1.5, 0, 7); ctx.fill(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(hx + 16, hy + 14, 3, 0, 7); ctx.fill(); } }
+    for (const [i, d] of w.tileHp) {
+      const x = i % w.w, y = (i / w.w) | 0;
+      if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+      this.bar(x * TS + 2, y * TS - 4, 28, 1 - d / BREAKABLE[w.get(x, y)], '#ffb04a');
     }
     // crates
     for (const cr of w.crates) {
@@ -214,32 +213,74 @@ export class Renderer {
     ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(x - 1, y - 1, w + 2, 5);
     ctx.fillStyle = col; ctx.fillRect(x, y, w * Math.max(0, Math.min(1, f)), 3);
   }
-  hpTile(w, x, y, t) {
-    const d = w.tileHp.get(y * w.w + x);
-    if (!d) return;
-    this.bar(x * TS + 2, y * TS - 4, 28, 1 - d / BREAKABLE[t], '#ffb04a');
+  // Paint one chunk's ground and static objects into a canvas.
+  bake(ch, prev) {
+    const bk = prev || { cv: this.spare.pop() || Object.assign(document.createElement('canvas'), { width: CPX, height: CPX }), ver: 0, seen: 0 };
+    const ctx = bk.cv.getContext('2d'), t = ch.t, bx = ch.cx * CS, by = ch.cy * CS;
+    for (let ly = 0; ly < CS; ly++) for (let lx = 0; lx < CS; lx++) {
+      const tt = t[ly * CS + lx], x = bx + lx, y = by + ly, h = hash(x, y), px = lx * TS, py = ly * TS;
+      ctx.fillStyle = SHADES[tt][h & 3]; ctx.fillRect(px, py, TS, TS);
+      if (tt === T.WATER) { ctx.fillStyle = 'rgba(255,255,255,.07)'; ctx.fillRect(px + ((h >> 4) % 20), py + ((h >> 9) % 24), 10, 2); }
+      else if (tt === T.ROAD && (h & 15) === 0) { ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fillRect(px + 14, py + 14, 4, 4); }
+      else if (tt === T.GRASS && (h & 7) === 0) { ctx.fillStyle = 'rgba(0,0,0,.15)'; ctx.fillRect(px + ((h >> 5) & 15) + 4, py + ((h >> 9) & 15) + 4, 2, 5); }
+    }
+    for (let ly = 0; ly < CS; ly++) for (let lx = 0; lx < CS; lx++) {
+      const tt = t[ly * CS + lx], px = lx * TS, py = ly * TS;
+      switch (tt) {
+        case T.TREE: ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.ellipse(px + 16, py + 27, 12, 5, 0, 0, 7); ctx.fill();
+          ctx.fillStyle = '#4a3322'; ctx.fillRect(px + 14, py + 18, 5, 10);
+          ctx.fillStyle = '#1f4a22'; ctx.beginPath(); ctx.arc(px + 16, py + 13, 13, 0, 7); ctx.fill();
+          ctx.fillStyle = '#2e6a30'; ctx.beginPath(); ctx.arc(px + 13, py + 10, 7, 0, 7); ctx.fill(); break;
+        case T.ROCK: ctx.fillStyle = '#5b5b66'; ctx.beginPath(); ctx.moveTo(px + 3, py + 28); ctx.lineTo(px + 8, py + 8); ctx.lineTo(px + 22, py + 4); ctx.lineTo(px + 30, py + 26); ctx.fill();
+          ctx.fillStyle = '#7b7b88'; ctx.beginPath(); ctx.moveTo(px + 8, py + 8); ctx.lineTo(px + 22, py + 4); ctx.lineTo(px + 18, py + 16); ctx.fill(); break;
+        case T.WALL: ctx.fillStyle = '#4a4252'; ctx.fillRect(px, py, TS, TS); ctx.fillStyle = '#5c5366'; ctx.fillRect(px, py, TS, 6); ctx.fillStyle = '#2b2630'; ctx.fillRect(px, py + TS - 4, TS, 4); break;
+        case T.STUMP: ctx.fillStyle = '#4a3322'; ctx.fillRect(px + 11, py + 18, 10, 7); ctx.fillStyle = '#6a4a30'; ctx.fillRect(px + 11, py + 18, 10, 3); break;
+        case T.RUBBLE: ctx.fillStyle = '#5b5348'; ctx.fillRect(px + 6, py + 20, 8, 6); ctx.fillRect(px + 18, py + 12, 7, 6); break;
+        case T.BARRICADE: ctx.fillStyle = '#8a5a30'; for (let k = 0; k < 3; k++) ctx.fillRect(px + 2, py + 5 + k * 9, 28, 6);
+          ctx.fillStyle = '#5a3a1e'; ctx.fillRect(px + 6, py + 2, 4, 28); ctx.fillRect(px + 22, py + 2, 4, 28); break;
+        case T.STONEWALL: ctx.fillStyle = '#8a8a96'; ctx.fillRect(px + 1, py + 1, 30, 30); ctx.fillStyle = '#a5a5b2'; ctx.fillRect(px + 1, py + 1, 30, 5); ctx.fillStyle = '#6a6a76'; ctx.fillRect(px + 15, py + 8, 2, 22); break;
+        case T.TURRET: ctx.fillStyle = '#34343c'; ctx.fillRect(px + 3, py + 3, 26, 26); ctx.fillStyle = '#d9b44a'; ctx.beginPath(); ctx.arc(px + 16, py + 16, 8, 0, 7); ctx.fill();
+          ctx.fillStyle = '#222'; ctx.fillRect(px + 16, py + 14, 14, 4); break;
+        case T.BEACON: ctx.fillStyle = '#34343c'; ctx.fillRect(px + 6, py + 20, 20, 8); break; // the glow is animated on top
+      }
+    }
+    bk.ver = ch.ver; this.baked.set(ch.idx, bk);
+    return bk;
+  }
+  // Return canvases of unloaded / long-unseen chunks to the spare pool.
+  evict(w) {
+    for (const [idx, bk] of this.baked) if (!w.chunks[idx] || this.frame - bk.seen > 600) { this.baked.delete(idx); if (this.spare.length < 24) this.spare.push(bk.cv); }
   }
 
+  // Minimap: a 160x160-tile window around the player. Terrain is painted into one world-sized canvas
+  // chunk by chunk (only chunks the player has revealed), so fog of war is simply "not painted yet".
+  mmChunk(w, ch, t) {
+    const x = this.mm.getContext('2d'), img = this.mmImg || (this.mmImg = x.createImageData(CS, CS)), d = img.data;
+    for (let i = 0; i < CS * CS; i++) { const col = MINI[t[i]]; d[i * 4] = col[0]; d[i * 4 + 1] = col[1]; d[i * 4 + 2] = col[2]; d[i * 4 + 3] = 255; }
+    x.putImageData(img, ch.cx * CS, ch.cy * CS);
+  }
   drawMini(game, dt) {
     const w = game.world, m = this.mini, mc = this.mctx;
-    if (this.mm.width !== w.w) { this.mm.width = w.w; this.mm.height = w.h; w.dirty = true; }
-    this.mmT -= dt;
-    if (w.dirty && this.mmT <= 0) {
-      this.mmT = 1; w.dirty = false;
-      const x = this.mm.getContext('2d'), img = x.createImageData(w.w, w.h);
-      for (let i = 0; i < w.tiles.length; i++) {
-        const col = MINI[w.tiles[i]];
-        img.data[i * 4] = col[0]; img.data[i * 4 + 1] = col[1]; img.data[i * 4 + 2] = col[2]; img.data[i * 4 + 3] = 255;
-      }
-      x.putImageData(img, 0, 0);
+    if (this.mm.width !== w.w) { this.mm.width = w.w; this.mm.height = w.h; this.mmDone = new Int32Array(w.cw * w.cw); this.mmQ = []; for (let i = 0; i < w.explored.length; i++) if (w.explored[i]) this.mmQ.push(i); }
+    for (const ch of w.loaded) if (w.explored[ch.idx] && this.mmDone[ch.idx] !== ch.ver) { this.mmChunk(w, ch, ch.t); this.mmDone[ch.idx] = ch.ver; }
+    // revealed chunks from a loaded save are repainted one per frame from their saved/generated tiles
+    for (let k = 0; k < 2 && this.mmQ.length; k++) {
+      const idx = this.mmQ.pop();
+      if (this.mmDone[idx] || w.chunks[idx]) continue;
+      const cx = idx % w.cw, cy = (idx / w.cw) | 0;
+      this.mmChunk(w, { cx, cy }, w.mod.get(idx) || w.gen.tiles(cx, cy)); this.mmDone[idx] = -1;
     }
+    const V = m.width, ptx = Math.floor(game.p.x / TS), pty = Math.floor(game.p.y / TS), ox = ptx - (V >> 1), oy = pty - (V >> 1);
     mc.imageSmoothingEnabled = false;
-    mc.clearRect(0, 0, m.width, m.height);
-    mc.drawImage(this.mm, 0, 0, m.width, m.height);
-    const sx = m.width / w.w, sy = m.height / w.h;
-    for (const cr of w.crates) if (!cr.looted) { mc.fillStyle = '#ffd24a'; mc.fillRect(cr.x * sx, cr.y * sy, 2, 2); }
-    for (const n of w.nests) { mc.fillStyle = n.alive ? '#ff4a5a' : '#555'; mc.fillRect(n.x * sx - 2, n.y * sy - 2, 5, 5); }
-    mc.fillStyle = '#5ad0ff'; mc.fillRect(w.home.x * sx - 2, w.home.y * sy - 2, 5, 5);
-    mc.fillStyle = '#fff'; mc.beginPath(); mc.arc(game.p.x / TS * sx, game.p.y / TS * sy, 3, 0, 7); mc.fill();
+    mc.fillStyle = '#05060a'; mc.fillRect(0, 0, V, V);
+    mc.drawImage(this.mm, ox, oy, V, V, 0, 0, V, V);
+    const seen = (x, y) => w.explored[(y >> 4) * w.cw + (x >> 4)] === 1;
+    for (const cr of w.crates) if (!cr.looted) { mc.fillStyle = '#ffd24a'; mc.fillRect(cr.x - ox, cr.y - oy, 2, 2); }
+    for (const n of w.gen.nests) {
+      if (n.x < ox || n.y < oy || n.x >= ox + V || n.y >= oy + V || !seen(n.x, n.y)) continue;
+      mc.fillStyle = w.deadNests.has(n.y * w.w + n.x) ? '#555' : '#ff4a5a'; mc.fillRect(n.x - ox - 2, n.y - oy - 2, 5, 5);
+    }
+    mc.fillStyle = '#5ad0ff'; mc.fillRect(w.home.x - ox - 2, w.home.y - oy - 2, 5, 5);
+    mc.fillStyle = '#fff'; mc.beginPath(); mc.arc(V >> 1, V >> 1, 3, 0, 7); mc.fill();
   }
 }

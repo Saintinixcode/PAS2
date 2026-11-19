@@ -15,8 +15,12 @@ export function buildFlow(game) {
   const ff = game.flow; ff.fill(INF);
   const start = FLOW_R * S + FLOW_R;
   ff[start] = 0;
-  const buckets = [[start]];
-  for (let c = 0; c < buckets.length; c++) {
+  // bucket queues are reused between rebuilds (no per-rebuild allocation)
+  const buckets = game._fb || (game._fb = []);
+  for (let k = 0; k < buckets.length; k++) if (buckets[k]) buckets[k].length = 0;
+  (buckets[0] || (buckets[0] = [])).push(start);
+  let maxC = 0;
+  for (let c = 0; c <= maxC; c++) {
     const b = buckets[c]; if (!b) continue;
     for (let k = 0; k < b.length; k++) {
       const i = b[k]; if (ff[i] !== c) continue;
@@ -29,7 +33,7 @@ export function buildFlow(game) {
         if (cost < 0) continue;
         if (dx && dy && (game.passCost(w.get(game.flowOx + x + dx, game.flowOy + y)) < 0 || game.passCost(w.get(game.flowOx + x, game.flowOy + y + dy)) < 0)) continue;
         const ni = ny * S + nx, nc = c + cost;
-        if (nc < ff[ni]) { ff[ni] = nc; (buckets[nc] || (buckets[nc] = [])).push(ni); }
+        if (nc < ff[ni]) { ff[ni] = nc; (buckets[nc] || (buckets[nc] = [])).push(ni); if (nc > maxC) maxC = nc; }
       }
     }
   }

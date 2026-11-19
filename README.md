@@ -24,24 +24,27 @@ Plain ES modules, no build step, no dependencies.
 ## Persistence
 Everything about the world is saved: terrain, harvested trees (stumps regrow a little each dawn),
 what you built, destroyed nests, looted crates, your level/upgrades/resources, the day clock.
-3 slots in localStorage, autosave every 30 s + on dawn/nest kill/pause/close.
+3 slots in IndexedDB. Only the chunks you changed are written; autosave every 30 s + on dawn/nest kill/pause/close. Old (v1) saves are migrated automatically and the original is kept as a `.v1backup` in localStorage.
 **Export / Import** moves a world to another browser as a .json file.
 
 ## Maps
-- **Fort Hollow**: hand-authored 96x96 (town, river + bridge, quarry, lake, 10 nests, named zones).
-- **Seeded**: procedural 128x128 from any seed; same seed, same starting world.
+- **World size**: 512x512 tiles, built from 16x16-tile chunks that are generated around you and unloaded behind you. The edge of the map is solid.
+- **Fort Hollow**: the hand-authored 96x96 town (river + bridge, quarry, lake, 10 nests, named zones) stamped into the middle of a generated world.
+- **Seeded**: the whole 512x512 world generated from any seed; same seed, same world. Farther from home means tougher zombies (zones: Outskirts, The Wilds, Deep Wilds, Dead Reach). The minimap is fogged until you have been there.
 
 ## Layout
     data/            JSON content (enemies so far; items, recipes, loot arrive in later steps)
     src/core/data.js JSON loader + validators (fetch in browser, fs in Node)
     src/tiles.js     tile ids, solidity, build costs, colours
-    src/world.js     persistent World (tiles, nests, crates), RLE save format
-    src/maps.js      Fort Hollow + seeded generator (nests verified reachable)
+    src/world.js     chunked World: lazy load/unload, modified-chunk tracking, fog, dead nests, looted crates
+    src/gen.js       deterministic chunk generator (terrain, roads, ruins, nests, crates)
+    src/maps.js      authored Fort Hollow stamp, newWorld()
+    src/migrate.js   v1 flat save -> chunk world
     src/game.js      Game state, update loop, save/load; delegates to src/sim/*
     src/sim/         collision, flow (zombie pathing), spawn, enemies, combat,
                      progression, gather, build, player, upgrades, constants (no DOM)
-    src/render.js    canvas renderer, night lighting, minimap
-    src/save.js      slots, export/import
+    src/render.js    canvas renderer: baked per-chunk canvases, night lighting, fogged minimap
+    src/store.js     IndexedDB (Map in tests): slots, dirty-chunk saves, export/import bundles
     src/main.js      menus, HUD, input, loop
     test/            sim.mjs (logic + saves), golden.mjs (seeded regression hash), render-smoke.mjs
     PLAN.md          roadmap and per-step status; docs/ has design notes

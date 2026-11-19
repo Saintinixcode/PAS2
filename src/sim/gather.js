@@ -32,7 +32,7 @@ export function updateHarvest(game, dt) {
   game.harvestT = 0; game.harvestKey = -1;
   const r = game.p.res;
   if (h.kind === 'crate') {
-    h.c.looted = true;
+    game.world.loot(h.c);
     const n = 3 + ((game.rng() * 6) | 0); r.scrap += n;
     let extra = ''; if (game.rng() < 0.4) { const m = 2 + ((game.rng() * 4) | 0); r.wood += m; extra = `, ${m} wood`; }
     game.say(`Crate looted: ${n} scrap${extra}.`, 'good');
@@ -45,11 +45,5 @@ export function updateHarvest(game, dt) {
 
 // Woods slowly grow back, so the land is renewable but remembers what you did.
 export function regrow(game) {
-  const w = game.world, px = game.p.x / TS, py = game.p.y / TS;
-  for (let i = 0; i < w.tiles.length; i++) {
-    if (w.tiles[i] !== T.STUMP || game.rng() > 0.15) continue;
-    const x = i % w.w, y = (i / w.w) | 0;
-    if (Math.hypot(x - px, y - py) < 4) continue;
-    w.tiles[i] = T.TREE; w.dirty = true;
-  }
+  game.world.regrow(game.rng, game.p.x / TS, game.p.y / TS);
 }

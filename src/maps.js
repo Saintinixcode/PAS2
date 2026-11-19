@@ -1,6 +1,16 @@
-import { T, SOLID } from './tiles.js';
+import { T } from './tiles.js';
 import { World } from './world.js';
-import { mulberry32, hashSeed, makeNoise } from './rng.js';
+import { mulberry32, makeNoise } from './rng.js';
+
+export const WORLD_SIZE = 512; // tiles per side (32 x 32 chunks of 16)
+
+// Small flat scratch grid the authored map is painted on; it becomes a stamp inside the big generated world.
+class Flat {
+  constructor(w, h) { this.w = w; this.h = h; this.tiles = new Uint8Array(w * h); this.nests = []; this.crates = []; this.zones = []; this.home = { x: 0, y: 0 }; }
+  inb(x, y) { return x >= 0 && y >= 0 && x < this.w && y < this.h; }
+  get(x, y) { return this.inb(x, y) ? this.tiles[y * this.w + x] : T.WALL; }
+  set(x, y, t) { if (this.inb(x, y)) this.tiles[y * this.w + x] = t; }
+}
 
 // ---------- helpers ----------
 function fill(w, x0, y0, x1, y1, t) {
@@ -27,7 +37,7 @@ function building(w, rnd, x, y, bw, bh, door, crate = true) {
   }
   if (crate && rnd() < 0.85) {
     const cx = x + 1 + ((rnd() * (bw - 2)) | 0), cy = y + 1 + ((rnd() * (bh - 2)) | 0);
-    w.crates.push({ x: cx, y: cy, looted: false });
+    w.crates.push([cx, cy]);
   }
 }
 function road(w, x0, y0, x1, y1) { fill(w, x0, y0, x1, y1, T.ROAD); }
@@ -39,98 +49,9 @@ function makeHome(w) {
   w.set(x, y, T.BEACON);
 }
 
-function reachableFrom(w, sx, sy) {
-  const seen = new Uint8Array(w.w * w.h);
-  const q = [sy * w.w + sx]; seen[q[0]] = 1;
-  for (let h = 0; h < q.length; h++) {
-    const i = q[h], x = i % w.w, y = (i / w.w) | 0;
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const nx = x + dx, ny = y + dy;
-      if (!w.inb(nx, ny)) continue;
-      const ni = ny * w.w + nx;
-      // Built tiles and trees count as passable for reachability: zombies chew
-      // through barricades and players can harvest trees.
-      if (seen[ni] || w.get(nx, ny) === T.WALL || w.get(nx, ny) === T.WATER || w.get(nx, ny) === T.ROCK) continue;
-      seen[ni] = 1; q.push(ni);
-    }
-  }
-  return seen;
-}
-
-function addNest(w, x, y) {
-  disc(w, x, y, 2, T.DIRT);
-  w.nests.push({ x, y, hp: 260, maxHp: 260, alive: true, cd: 2 });
-}
-
-function placeNests(w, rnd, count, minHome, minSep) {
-  const reach = reachableFrom(w, w.home.x, w.home.y);
-  let tries = 0;
-  while (w.nests.length < count && tries++ < 4000) {
-    const x = 4 + ((rnd() * (w.w - 8)) | 0), y = 4 + ((rnd() * (w.h - 8)) | 0);
-    if (Math.hypot(x - w.home.x, y - w.home.y) < minHome) continue;
-    if (!reach[y * w.w + x] || SOLID[w.get(x, y)]) continue;
-    if (w.nests.some((n) => Math.hypot(n.x - x, n.y - y) < minSep)) continue;
-    addNest(w, x, y);
-  }
-}
-
-// ---------- seeded world ----------
-export function generateWorld(seed, size = 128) {
-  const w = new World(size, size);
-  w.kind = 'seeded'; w.seed = String(seed);
-  const s = hashSeed(w.seed);
-  const rnd = mulberry32(s);
-  const n1 = makeNoise(s), n2 = makeNoise(s ^ 0x9e3779b9), n3 = makeNoise(s ^ 0x85ebca6b);
-
-  for (let y = 0; y < size; y++)
-    for (let x = 0; x < size; x++) {
-      const e = n1(x * 0.05, y * 0.05, 4);
-      const f = n2(x * 0.08, y * 0.08, 3);
-      const r = n3(x * 0.1, y * 0.1, 3);
-      let t = T.GRASS;
-      if (e < 0.34) t = T.WATER;
-      else if (r > 0.66) t = rnd() < 0.7 ? T.ROCK : T.DIRT;
-      else if (f > 0.56) t = rnd() < 0.55 ? T.TREE : T.GRASS;
-      else if (rnd() < 0.025) t = T.TREE;
-      else if (rnd() < 0.03) t = T.DIRT;
-      w.tiles[y * size + x] = t;
-    }
-
-  // Roads (they also act as bridges over water).
-  const cols = [], rows = [];
-  for (let k = 20; k < size - 10; k += 34) { cols.push(k + ((rnd() * 10) | 0) - 5); rows.push(k + ((rnd() * 10) | 0) - 5); }
-  w.home = { x: (size / 2) | 0, y: (size / 2) | 0 };
-  cols.push(w.home.x); rows.push(w.home.y);
-  for (const x of cols) road(w, x, 0, x, size - 1);
-  for (const y of rows) road(w, 0, y, size - 1, y);
-
-  // Ruins
-  let placed = 0, tries = 0;
-  while (placed < 38 && tries++ < 600) {
-    const bw = 5 + ((rnd() * 5) | 0), bh = 5 + ((rnd() * 4) | 0);
-    const x = 3 + ((rnd() * (size - bw - 6)) | 0), y = 3 + ((rnd() * (size - bh - 6)) | 0);
-    if (Math.hypot(x - w.home.x, y - w.home.y) < 14) continue;
-    let ok = true;
-    for (let yy = y - 1; yy <= y + bh && ok; yy++)
-      for (let xx = x - 1; xx <= x + bw && ok; xx++) {
-        const t = w.get(xx, yy);
-        if (t === T.WATER || t === T.ROAD || t === T.WALL || t === T.FLOOR) ok = false;
-      }
-    if (!ok) continue;
-    building(w, rnd, x, y, bw, bh, 'nesw'[(rnd() * 4) | 0]);
-    placed++;
-  }
-
-  makeHome(w);
-  w.zones.push({ name: 'Home Ground', x: w.home.x, y: w.home.y, r: 10 });
-  placeNests(w, rnd, 10, 30, 16);
-  return w;
-}
-
 // ---------- hand-authored world ----------
-export function fortHollow() {
-  const W = 96, w = new World(W, W);
-  w.kind = 'fort-hollow'; w.seed = 'fort-hollow'; w.name = 'Fort Hollow';
+function buildFortHollowStamp() {
+  const W = 96, w = new Flat(W, W);
   const rnd = mulberry32(1913);
   const n1 = makeNoise(77), n2 = makeNoise(78);
 
@@ -178,21 +99,27 @@ export function fortHollow() {
   makeHome(w);
 
   for (const [x, y] of [[10, 10], [86, 30], [90, 52], [84, 84], [12, 84], [46, 88], [28, 14], [74, 76], [6, 58], [88, 8]])
-    addNest(w, x, y);
+    { disc(w, x, y, 2, T.DIRT); w.nests.push([x, y]); }
 
   w.zones = [
     { name: 'Fort Hollow', x: 43, y: 47, r: 18 }, { name: 'Dead Woods', x: 20, y: 18, r: 18 },
     { name: 'The Quarry', x: 20, y: 78, r: 16 }, { name: 'Riverlands', x: 76, y: 52, r: 16 },
     { name: 'Lakeshore', x: 80, y: 16, r: 16 }, { name: 'The Flats', x: 60, y: 84, r: 18 },
   ];
-  return w;
+  return { w: W, h: W, tiles: w.tiles, home: [w.home.x, w.home.y], nests: w.nests, crates: w.crates, zones: w.zones };
 }
 
+export function fortHollowStamp() {
+  const st = buildFortHollowStamp();
+  st.ox = st.oy = (WORLD_SIZE - st.w) >> 1;
+  return st;
+}
+
+// kind: 'fort-hollow' (authored town stamped into a generated world) | 'seeded' (fully generated)
 export function newWorld(kind, seed) {
-  if (kind === 'fort-hollow') return fortHollow();
-  const w = generateWorld(seed || String((Math.random() * 1e9) | 0));
-  w.name = `Seed ${w.seed}`;
-  return w;
+  if (kind === 'fort-hollow') {
+    return new World({ kind, seed: 'fort-hollow', name: 'Fort Hollow', size: WORLD_SIZE, stamp: fortHollowStamp(), stampBuilt: 'fort-hollow' });
+  }
+  seed = String(seed || (Math.random() * 1e9) | 0);
+  return new World({ kind: 'seeded', seed, name: `Seed ${seed}`, size: WORLD_SIZE, stamp: null });
 }
-
-export { reachableFrom };

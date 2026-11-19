@@ -20,7 +20,7 @@ export function pickType(game) {
 export function spawn(game, x, y, nest) {
   if (game.enemies.length >= MAX_ENEMIES) return null;
   const T = game.et, ti = game.pickType(), day = game.time.day;
-  const hp = T.hp[ti] * (1 + (day - 1) * TUNING.hpScalePerDay);
+  const hp = T.hp[ti] * (1 + (day - 1) * TUNING.hpScalePerDay) * (1 + TUNING.tierHp * game.world.tier(x / TS, y / TS)); // farther from home = tougher
   const e = {
     x, y, ti, type: T.names[ti], hp, maxHp: hp,
     speed: T.speed[ti] * (0.9 + game.rng() * 0.2), dmg: T.dmg[ti] * (1 + (day - 1) * TUNING.dmgScalePerDay),
@@ -33,15 +33,9 @@ export function spawn(game, x, y, nest) {
   return e;
 }
 
-function aliveNests(world) {
-  let a = 0;
-  for (let i = 0; i < world.nests.length; i++) if (world.nests[i].alive) a++;
-  return a;
-}
-
 export function spawnAmbient(game, dt) {
-  const total = game.world.nests.length || 1, day = game.time.day;
-  const intensity = 0.4 + 0.6 * (aliveNests(game.world) / total);
+  const total = game.world.nestTotal || 1, day = game.time.day;
+  const intensity = 0.4 + 0.6 * (game.world.nestsLeft() / total);
   const night = game.isNight;
   const rate = (night ? TUNING.ambientNightBase + day * TUNING.ambientNightPerDay : TUNING.ambientDay) * intensity;
   const cap = night ? Math.min(TUNING.ambientCapMax, TUNING.ambientCapNight + day * TUNING.ambientCapPerDay) : TUNING.ambientCapDay;

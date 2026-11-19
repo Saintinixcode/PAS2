@@ -43,14 +43,14 @@ globalThis.window = { innerWidth: 1280, innerHeight: 720 };
 globalThis.document = { createElement: canvas };
 const { Renderer } = await import('../src/render.js');
 
-// Budget is deliberately loose today (~2,050 calls). Step 2 (chunk canvases) should cut it by an order of magnitude;
-// tighten RENDER_BUDGET then.
-const RENDER_BUDGET = 2600;
+// Warm frame: ground and objects are baked per chunk, so a frame is drawImage per chunk + entities + night layer.
+// (Before chunk baking this was ~2,160 calls; now ~600.)
+const RENDER_BUDGET = 900;
 for (const [label, clock] of [['day', 0.3], ['night', 0.8]]) {
   const g = new Game(newWorld('fort-hollow')); g.rng = mulberry32(5); g.time.clock = clock; g.time.day = 5;
   for (let i = 0; i < 40; i++) { const a = g.rng() * 6.28, d = 100 + g.rng() * 300; g.spawn(g.p.x + Math.cos(a) * d, g.p.y + Math.sin(a) * d, false); }
   const r = new Renderer(canvas(), { width: 160, height: 160, getContext: mkCtx });
-  for (let i = 0; i < 3; i++) r.draw(g, { x: 500, y: 300 }, 0.016);
+  for (let i = 0; i < 40; i++) r.draw(g, { x: 500, y: 300 }, 0.016);   // warm: every visible chunk baked
   for (const k in counts) delete counts[k];
   r.draw(g, { x: 500, y: 300 }, 0.016);
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
