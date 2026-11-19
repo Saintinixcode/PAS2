@@ -1,0 +1,10 @@
+{
+  "name": "pa-survivors",
+  "version": "0.2.0-dev",
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "perf": "node test/perf.mjs",
+    "test": "node test/sim.mjs && node test/golden.mjs --check && node test/render-smoke.mjs"
+  }
+}

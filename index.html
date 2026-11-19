@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PA Survivors</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud" class="hidden">
+  <div class="panel tl">
+    <div class="bar hp"><i id="hpbar"></i><span id="hptxt"></span></div>
+    <div class="bar xp"><i id="xpbar"></i><span id="lvltxt"></span></div>
+    <div id="res"><span id="rWood"></span><span id="rStone"></span><span id="rScrap"></span></div>
+  </div>
+  <div class="panel tr">
+    <canvas id="mini" width="160" height="160"></canvas>
+    <div id="clock"></div>
+    <div id="zone"></div>
+  </div>
+  <div class="panel bl" id="weaponpanel">
+    <div id="wname"></div>
+    <div class="bar rl"><i id="wbar"></i><span id="wtxt"></span></div>
+    <div id="wmode"></div>
+  </div>
+  <div id="toolbar" class="hidden"></div>
+  <div id="toasts"></div>
+  <div id="perf" class="hidden"></div>
+  <div class="panel br" id="legend">
+    <div class="lh">CONTROLS</div>
+    <div><b>WASD</b> move</div><div><b>Mouse</b> aim · <b>LMB</b> fire</div><div><b>R</b> reload · <b>F</b> auto-fire</div>
+    <div><b>1/2</b> or <b>Q</b> weapon</div><div><b>Hold E</b> harvest / loot</div><div><b>B</b> build · <b>1-3</b> piece</div>
+    <div><b>V</b> 5 scrap → 5 ammo</div><div><b>X</b> / RMB remove · <b>Esc</b> pause</div>
+    <div><b>F3</b> performance readout</div>
+  </div>
+</div>
+
+<div id="menu" class="screen">
+  <h1>PA SURVIVORS</h1>
+  <p class="sub">Survive the night. Clear the nests. Build something that lasts.</p>
+  <div id="slots"></div>
+  <div class="row"><button id="import">Import save…</button><input id="file" type="file" accept=".json" hidden></div>
+  <p class="small" id="menumsg"></p>
+</div>
+
+<div id="newworld" class="screen hidden">
+  <div class="card">
+    <h2>New world</h2>
+    <label>Map
+      <select id="nwkind">
+        <option value="fort-hollow">Fort Hollow (hand-built, 96×96)</option>
+        <option value="seeded">Generated from a seed (128×128)</option>
+      </select>
+    </label>
+    <label id="seedrow">Seed <input id="nwseed" placeholder="leave blank for random"></label>
+    <div class="row"><button id="nwgo" class="primary">Start</button><button id="nwcancel">Cancel</button></div>
+  </div>
+</div>
+
+<div id="levelup" class="screen hidden">
+  <div class="card wide"><h2>Level up</h2><div id="choices" class="row"></div></div>
+</div>
+
+<div id="pause" class="screen hidden">
+  <div class="card">
+    <h2>Paused</h2>
+    <div class="col">
+      <button id="resume" class="primary">Resume</button>
+      <button id="savenow">Save now</button>
+      <button id="export">Export save file</button>
+      <button id="quit">Save &amp; quit to menu</button>
+    </div>
+    <p class="small" id="pausestats"></p>
+  </div>
+</div>
+
+<div id="death" class="screen hidden">
+  <div class="card"><h2>You fell</h2><p class="small">Half your resources are lost. The world remembers everything else.</p>
+  <button id="respawn" class="primary">Wake at the beacon</button></div>
+</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

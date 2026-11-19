@@ -1,0 +1,9 @@
+{
+  "walker":  { "hp": 32,  "speed": 52, "dmg": 8,  "r": 10, "xp": 2,  "color": "#7fae5a", "minDay": 1, "weight": 1.0, "dropChance": 0.1, "dropScale": 1 },
+  "runner":  { "hp": 18,  "speed": 98, "dmg": 6,  "r": 8,  "xp": 2,  "color": "#c8c24a", "minDay": 2, "weight": 0.45, "dropChance": 0.08, "dropScale": 1 },
+  "spitter": { "hp": 24,  "speed": 46, "dmg": 6,  "r": 9,  "xp": 4,  "color": "#8a5ad0", "minDay": 3, "weight": 0.30, "dropChance": 0.16, "dropScale": 1,
+               "keepMin": 150, "keepMax": 250, "shotRate": 2.2, "shotDmg": 9, "shotSpeed": 240 },
+  "brute":   { "hp": 160, "speed": 38, "dmg": 20, "r": 15, "xp": 10, "color": "#b03030", "minDay": 4, "weight": 0.18, "dropChance": 0.55, "dropScale": 2 },
+  "bloater": { "hp": 110, "speed": 30, "dmg": 10, "r": 17, "xp": 8,  "color": "#d4e070", "minDay": 5, "weight": 0.14, "dropChance": 0.4, "dropScale": 2,
+               "burstR": 75, "burstDmg": 22 }
+}
