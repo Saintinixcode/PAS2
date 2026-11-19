@@ -1,6 +1,8 @@
-# PA Survivors: v0.2 plan
+# PA Survivors: v0.2 plan (project name: pas2-v3)
 
 Status key: [ ] todo · [~] in progress · [x] done. Update this file at the end of every step.
+
+**Naming:** the project is **pas2-v3** (GitHub `Saintinixcode/PAS2`, Vercel project `pas2-v3`) until every milestone below is done. Step 1 is shipped; next up is Step 2.
 
 ## Goals (from the brief)
 1. Much bigger map, **chunk-based**, only the area around the player is loaded or simulated.

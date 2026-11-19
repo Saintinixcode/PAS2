@@ -1,4 +1,4 @@
-# PA Survivors
+# PA Survivors (project: pas2-v3)
 
 A top-down, survivors-like zombie game with **persistent worlds**, inspired by Zed Zone.
 Plain ES modules, no build step, no dependencies.
